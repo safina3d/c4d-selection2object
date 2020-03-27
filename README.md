@@ -16,8 +16,8 @@ Clone the project or download the zip file and extract it into the Maxon plugins
 ### How to use
 - Select your polygon object
 - Make sure that your object has at least one **polygon selection tag**
-- Click on the "Selection To Objects" icon to run the plugin
+- Click on the "Selections To Objects" icon to run the plugin
 
-### Additionnal commands:
+### Additional commands:
 - ALT Button: Make the generated objects children of the original object
 - CTRL Button: Delete the original object
