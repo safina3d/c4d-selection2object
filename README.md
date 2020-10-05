@@ -21,3 +21,8 @@ Clone the project or download the zip file and extract it into the Maxon plugins
 ### Additional commands:
 - ALT Button: Make the generated objects children of the original object
 - CTRL Button: Delete the original object
+
+### ChangeLog
+- V1.1
+  - [Fix] Incorrect children hierarchy
+  - [Feat] Selection tag removed from source object
