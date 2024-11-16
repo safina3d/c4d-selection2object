@@ -2,7 +2,7 @@
 
 """
   Author  : Safina3D
-  Version : 1.1.0
+  Version : 1.2.0
   Website : https://safina3d.blogspot.com
 """
 
@@ -32,6 +32,22 @@ def remove_selection_tags(obj):
         if c4d.Tpolygonselection == tag.GetType():
             tag.Remove()
 
+def remove_unused_materials_from_split_obj(obj, selection_name):
+    if obj is None:
+        return
+
+    tags = obj.GetTags()
+    for tag in tags:
+        if tag.GetType() != c4d.Ttexture:
+            continue
+        
+        restriction_name = tag[c4d.TEXTURETAG_RESTRICTION]
+
+        if restriction_name == selection_name:
+            # Erase restriction as we've already split the object
+            tag[c4d.TEXTURETAG_RESTRICTION] = ""
+        elif restriction_name != "":
+            tag.Remove()
 
 class SelectionsToObjects(c4d.plugins.CommandData):
 
@@ -65,23 +81,30 @@ class SelectionsToObjects(c4d.plugins.CommandData):
                     if bs.IsSelected(i):
                         poly_selection.Select(i)
 
-                result = call_split_command(original_obj, doc)
-                if result:
-                    result.SetName(tag[c4d.ID_BASELIST_NAME])
+                split_obj = call_split_command(original_obj, doc)
+                if split_obj:
+                    selection_name = tag.GetName()
+                    split_obj.SetName(selection_name)
                     utils.SendModelingCommand(command=c4d.MCOMMAND_DELETE,
                                               list=[original_obj],
                                               mode=c4d.MODELINGCOMMANDMODE_POLYGONSELECTION,
                                               doc=doc)
-                    if make_child:
-                        doc.InsertObject(result, original_obj)
+                    
+                    remove_selection_tags(split_obj)
+                    remove_unused_materials(obj=split_obj, selection_name=selection_name)
+                    
+                    if make_child:_from_split_obj
+                        doc.InsertObject(split_obj, parent=original_obj)
                     else:
-                        doc.InsertObject(result, None, original_obj)
+                        doc.InsertObject(split_obj, parent=None, pred=original_obj)
 
-                    doc.AddUndo(c4d.UNDOTYPE_NEW, result)
-                    remove_selection_tags(result)
+                    doc.AddUndo(c4d.UNDOTYPE_NEW, split_obj)
                     new_obj_count += 1
 
                 tag.Remove()
+
+        # Original object is typically covered with redundant materials
+        remove_unused_materials(obj=original_obj, selection_name=None)
 
         if delete_obj and not make_child and new_obj_count > 0:
             original_obj.Remove()
@@ -98,9 +121,9 @@ if __name__ == '__main__':
 
     c4d.plugins.RegisterCommandPlugin(
         id=1055923,
-        str='Selections To Objects 1.1',
+        str='Selections To Objects 1.2',
         info=0,
         icon=icon,
-        help='Convert polygon selection tags to objects',
+        help='Convert polygon selection tags to objects. [CTRL] Delete Source. [SHIFT] Insert as Children',
         dat=SelectionsToObjects()
     )
