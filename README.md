@@ -2,7 +2,7 @@
 
 ##### Cinema 4D Python Plugin
 
-![Selections To Object Icon](https://3.bp.blogspot.com/-ldXQ2BSFV8M/Xn4udU72loI/AAAAAAAACe4/5jtp9pKhZXYRGTHJQRNmtAUuuGzsXH7-gCKgBGAsYHg/s1600/selections2objects256.png "Icon")
+![Selections To Objects Icon](SelectionToObject/res/icons/selection.png "Icon")
 
 Convert all polygon selection tags, or all materials, into separate objects
 
@@ -31,14 +31,14 @@ All selected objects are converted in a single undo step.
 
 Click on the gear icon next to the command in the menu to open the options dialog:
 
-- **Split by**
-  - *Polygon selections*: one object per polygon selection tag
-  - *Materials*: one object per material tag, using the polygons where the material is visible
-- **Insert as children**: make the generated objects children of the source object
-- **Delete source object**: ignored when inserting as children. Children of the deleted object are kept.
-- **Delete source object when empty**: delete the source object when all its polygons have been converted
-- **Center axis of generated objects**: move the axis of each generated object to the center of its bounding box
-- **Group generated objects under a null**
+- **Split**
+  - *Create one object per*: polygon selection tag, or material tag (using the polygons where the material is visible)
+- **New objects**
+  - *Place them*: next to the source object, or inside it as children
+  - *Put them in a Null named after the source object*
+  - *Move the axis of each one to the center of its polygons*
+- **Source object**
+  - *After conversion*: keep it with its remaining polygons, delete it, or delete it only if no polygon is left. Not available when new objects are placed inside it. Its child objects are always kept.
 
 Options are saved in the Cinema 4D preferences.
 
@@ -72,6 +72,7 @@ Tests run inside Cinema 4D with `c4dpy`, located in the Cinema 4D installation d
   - [Feat] Center axis of generated objects
   - [Feat] Group generated objects under a null
   - [Feat] Delete source object when empty
+  - [Feat] New icon and clearer options
   - [Feat] Selection tags emptied by the conversion are removed
   - [Fix] Deleting the source object no longer deletes its children
   - [Fix] Generated children of an animated source object were animated twice

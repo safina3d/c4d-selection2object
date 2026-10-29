@@ -23,13 +23,14 @@ finally:
 
 if __name__ == '__main__':
     icon = bitmaps.BaseBitmap()
-    icon.InitWith(os.path.join(PLUGIN_DIR, 'res', 'icons', 'selection.tif'))
+    icon.InitWith(os.path.join(PLUGIN_DIR, 'res', 'icons', 'selection.png'))
 
     c4d.plugins.RegisterCommandPlugin(
         id=PLUGIN_ID,
         str=f'Selections To Objects {PLUGIN_VERSION}',
         info=c4d.PLUGINFLAG_COMMAND_OPTION_DIALOG,
         icon=icon,
-        help='Convert polygon selection tags or materials to objects. [CTRL] Delete Source. [SHIFT] Insert as Children',
+        help='Create one object per polygon selection tag or material tag. '
+             'SHIFT: place them inside the source object. CTRL: delete the source object.',
         dat=SelectionsToObjects()
     )
