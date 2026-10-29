@@ -112,4 +112,3 @@ def edit_options():
     dialog.Open(c4d.DLG_TYPE_MODAL, defaultw=300)
     if dialog.accepted:
         save_options(dialog.options)
-    return dialog.accepted

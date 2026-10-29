@@ -10,6 +10,11 @@ from .options import SPLIT_BY_MATERIALS
 
 SELECTION_TAG_TYPES = (c4d.Tpolygonselection, c4d.Tpointselection, c4d.Tedgeselection)
 
+TRANSFORM_PARAMETERS = (
+    c4d.ID_BASEOBJECT_REL_POSITION, c4d.ID_BASEOBJECT_REL_ROTATION, c4d.ID_BASEOBJECT_REL_SCALE,
+    c4d.ID_BASEOBJECT_FROZEN_POSITION, c4d.ID_BASEOBJECT_FROZEN_ROTATION, c4d.ID_BASEOBJECT_FROZEN_SCALE,
+)
+
 
 def call_modeling_command(command, obj, doc):
     """Runs a modeling command on the active polygon selection of an object."""
@@ -83,17 +88,16 @@ def clean_source(obj, groups, split_mode):
 
 def center_axis(obj):
     """Moves the axis of an object to the center of its bounding box."""
-    points = obj.GetAllPoints()
-    if not points:
-        return
-
-    min_point = c4d.Vector(min(p.x for p in points), min(p.y for p in points), min(p.z for p in points))
-    max_point = c4d.Vector(max(p.x for p in points), max(p.y for p in points), max(p.z for p in points))
-    center = (min_point + max_point) * 0.5
-
-    obj.SetAllPoints([p - center for p in points])
+    obj.Message(c4d.MSG_UPDATE)
+    center = obj.GetMp()
+    obj.SetAllPoints([p - center for p in obj.GetAllPoints()])
     obj.Message(c4d.MSG_UPDATE)
     obj.SetMl(obj.GetMl() * utils.MatrixMove(center))
+
+
+def get_transform_tracks(obj):
+    """Returns the position, rotation and scale animation tracks."""
+    return [track for track in obj.GetCTracks() if track.GetDescriptionID()[0].id in TRANSFORM_PARAMETERS]
 
 
 def insert_pieces(doc, obj, pieces, options):
@@ -108,11 +112,21 @@ def insert_pieces(doc, obj, pieces, options):
         null = c4d.BaseObject(c4d.Onull)
         null.SetName(obj.GetName())
         null.SetMl(matrix)
+        if not options.as_children:
+            # The null replaces the source object transformation
+            for track in get_transform_tracks(obj):
+                null.InsertTrackSorted(track.GetClone())
         doc.InsertObject(null, parent=parent, pred=pred)
         doc.AddUndo(c4d.UNDOTYPE_NEW, null)
         parent, pred, matrix = null, None, c4d.Matrix()
 
+    # Pieces keep the source object animation only when they keep its transformation
+    keep_animation = not (options.as_children or options.group_under_null or options.center_axis)
+
     for piece in pieces:
+        if not keep_animation:
+            for track in get_transform_tracks(piece):
+                track.Remove()
         piece.SetMl(matrix)
         if options.center_axis:
             center_axis(piece)
@@ -140,6 +154,11 @@ def convert_object(doc, obj, groups, options):
     """Converts the groups of an object into separate objects. Returns the generated objects."""
     # All splits are done on a single clone without children
     work_obj = obj.GetClone(flags=c4d.COPYFLAGS_NO_HIERARCHY | c4d.COPYFLAGS_NO_BITS)
+    if options.split_mode != SPLIT_BY_MATERIALS:
+        # Removed from the pieces anyway, avoids remapping them on each split
+        for tag in get_tags(work_obj, c4d.Tpolygonselection):
+            tag.Remove()
+
     selection_tags = [tag for tag in obj.GetTags() if tag.GetType() in SELECTION_TAG_TYPES
                       and tag.GetBaseSelect().GetCount() > 0]
 
@@ -189,7 +208,12 @@ def convert_object(doc, obj, groups, options):
 
 def convert_objects(doc, objects, options):
     """Converts several objects in a single undo step. Returns True if any object was converted."""
-    jobs = [(obj, build_groups(obj, options.split_mode)) for obj in objects]
+    try:
+        jobs = [(obj, build_groups(obj, options.split_mode)) for obj in objects]
+    except Exception as e:
+        print(f"Selections To Objects - error while reading the selections: {e}")
+        return False
+
     jobs = [(obj, groups) for obj, groups in jobs if groups]
     if not jobs:
         return False

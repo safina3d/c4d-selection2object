@@ -53,6 +53,7 @@ Options are saved in the Cinema 4D preferences.
 - Materials applied to the whole object are kept on every generated object. Materials restricted to a converted selection are moved to the matching object.
 - When splitting by materials, a polygon goes to the right-most material visible on it. Polygons without material stay on the source object.
 - Point, edge and polygon selection tags emptied by the conversion are removed.
+- Position, rotation and scale animation of the source object is kept on generated objects inserted next to it, or on the null when grouping. With *Center axis*, generated objects are not animated unless grouped under a null or inserted as children.
 
 ### Tests
 
@@ -73,6 +74,8 @@ Tests run inside Cinema 4D with `c4dpy`, located in the Cinema 4D installation d
   - [Feat] Delete source object when empty
   - [Feat] Selection tags emptied by the conversion are removed
   - [Fix] Deleting the source object no longer deletes its children
+  - [Fix] Generated children of an animated source object were animated twice
+  - [Perf] Faster on large meshes with many selections
 - v1.2.1
   - [Fix] Materials applied to the whole object were removed from the generated objects
   - [Fix] Generated children were offset when the original object was transformed

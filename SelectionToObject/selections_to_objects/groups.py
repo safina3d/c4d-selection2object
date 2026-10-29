@@ -26,18 +26,22 @@ def get_tags(obj, tag_type):
 def resolve_regions(regions, count):
     """Returns one selection per region, a polygon belonging to the last region containing it.
     A region set to None contains every polygon."""
-    owners = [-1] * count
-    for index, region in enumerate(regions):
-        selected = region.GetAll(count) if region is not None else [True] * count
-        for i in range(count):
-            if selected[i]:
-                owners[i] = index
+    all_polygons = c4d.BaseSelect()
+    if count > 0:
+        all_polygons.SelectAll(count - 1)
 
+    taken = c4d.BaseSelect()
     selections = []
-    for index in range(len(regions)):
-        selection = c4d.BaseSelect()
-        selection.SetAll([owner == index for owner in owners])
+    for region in reversed(regions):
+        selection = all_polygons.GetClone()
+        if region is not None:
+            # Also drops indices out of range
+            selection.Cross(region)
+        selection.DeselectFrom(taken)
+        taken.Merge(selection)
         selections.append(selection)
+
+    selections.reverse()
     return selections
 
 

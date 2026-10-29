@@ -518,6 +518,142 @@ class TagsTest(BaseTest):
         self.assertEqual(tags_of_type(source, c4d.Tuvw)[0].GetDataCount(), 4)
 
 
+def animate_position_x(doc, obj, values):
+    """Adds a position X track with a key per (frame, value)."""
+    desc_id = c4d.DescID(c4d.DescLevel(c4d.ID_BASEOBJECT_REL_POSITION, c4d.DTYPE_VECTOR, 0),
+                         c4d.DescLevel(c4d.VECTOR_X, c4d.DTYPE_REAL, 0))
+    track = c4d.CTrack(obj, desc_id)
+    obj.InsertTrackSorted(track)
+    curve = track.GetCurve()
+    for frame, value in values:
+        key = curve.AddKey(c4d.BaseTime(frame, doc.GetFps()))['key']
+        key.SetValue(curve, value)
+
+
+class AnimationTest(BaseTest):
+
+    def setUp(self):
+        super().setUp()
+        add_selection(self.obj, 'A', [0])
+        animate_position_x(self.doc, self.obj, [(0, 0.0), (10, 500.0)])
+
+    def world_x_at_frame_10(self, obj):
+        self.doc.SetTime(c4d.BaseTime(10, self.doc.GetFps()))
+        self.doc.ExecutePasses(None, True, True, True, c4d.BUILDFLAGS_NONE)
+        return round(obj.GetMg().off.x, 3)
+
+    def test_siblings_keep_animation(self):
+        self.assertTrue(self.convert())
+
+        source, a = root_objects(self.doc)
+        self.assertEqual(self.world_x_at_frame_10(a), 500)
+
+    def test_children_follow_animated_parent(self):
+        self.assertTrue(self.convert(as_children=True))
+
+        self.assertEqual(self.world_x_at_frame_10(self.obj.GetDown()), 500)
+
+    def test_null_carries_animation(self):
+        self.assertTrue(self.convert(group_under_null=True, delete_source=True))
+
+        null, = root_objects(self.doc)
+        self.assertEqual(self.world_x_at_frame_10(null.GetDown()), 500)
+
+
+class EdgeCasesTest(BaseTest):
+
+    def test_error_restores_document(self):
+        add_selection(self.obj, 'A', [0])
+        add_selection(self.obj, 'B', [1])
+        self.doc.InsertObject(c4d.BaseObject(c4d.Onull))
+        original_command = split.call_modeling_command
+        calls = []
+
+        def failing_command(command, obj, doc):
+            calls.append(command)
+            if len(calls) == 2:
+                return False
+            return original_command(command, obj, doc)
+
+        split.call_modeling_command = failing_command
+        try:
+            self.assertFalse(self.convert(delete_source=True))
+        finally:
+            split.call_modeling_command = original_command
+
+        objects = root_objects(self.doc)
+        self.assertEqual(names(objects), ['Null', 'Source'])
+        self.assertEqual(objects[1].GetPolygonCount(), 6)
+        self.assertEqual(tag_names(objects[1], c4d.Tpolygonselection), ['A', 'B'])
+
+    def test_selection_out_of_range_is_ignored(self):
+        add_selection(self.obj, 'A', [0, 1, 50])
+
+        self.assertTrue(self.convert())
+
+        source, a = root_objects(self.doc)
+        self.assertEqual(a.GetPolygonCount(), 2)
+        self.assertEqual(source.GetPolygonCount(), 4)
+
+    def test_ngons(self):
+        plane = c4d.BaseObject(c4d.Oplane)
+        plane[c4d.PRIM_PLANE_SUBW] = 4
+        plane[c4d.PRIM_PLANE_SUBH] = 4
+        obj = utils.SendModelingCommand(c4d.MCOMMAND_CURRENTSTATETOOBJECT, [plane], doc=self.doc)[0]
+        self.doc.InsertObject(obj)
+        polygon_selection = obj.GetPolygonS()
+        for i in (0, 1, 4, 5):
+            polygon_selection.Select(i)
+        utils.SendModelingCommand(c4d.MCOMMAND_MELT, [obj], c4d.MODELINGCOMMANDMODE_POLYGONSELECTION,
+                                  c4d.BaseContainer(), self.doc)
+        self.assertEqual(obj.GetNgonCount(), 1)
+        # Polygons making the ngon
+        ngon_selection = c4d.BaseSelect()
+        _, polygon_to_ngon = obj.GetPolygonTranslationMap()
+        for i, ngon in enumerate(polygon_to_ngon):
+            if ngon == 0:
+                ngon_selection.Select(i)
+        tag = obj.MakeTag(c4d.Tpolygonselection)
+        tag.SetName('Ngon')
+        ngon_selection.CopyTo(tag.GetBaseSelect())
+        expected = polygon_centers(obj, [i for i in range(obj.GetPolygonCount()) if ngon_selection.IsSelected(i)])
+
+        self.assertTrue(split.convert_objects(self.doc, [obj], Options()))
+
+        piece = obj.GetNext()
+        self.assertEqual(piece.GetName(), 'Ngon')
+        self.assertEqual(piece.GetNgonCount(), 1)
+        self.assertEqual(polygon_centers(piece), expected)
+        self.assertEqual(obj.GetNgonCount(), 0)
+
+    def test_children_with_center_axis(self):
+        add_selection(self.obj, 'C', [4])
+        self.obj.SetMg(utils.MatrixMove(c4d.Vector(100, 50, -30)) * utils.HPBToMatrix(c4d.Vector(0.5, 0.3, 0.1)))
+        expected = polygon_centers(self.obj, [4])
+
+        self.assertTrue(self.convert(as_children=True, center_axis=True))
+
+        piece = self.obj.GetDown()
+        self.assertEqual(polygon_centers(piece), expected)
+        self.assertAlmostEqual((piece.GetMl().off - c4d.Vector(0, 0, -100)).GetLength(), 0, places=3)
+
+    def test_undo_split_by_materials(self):
+        add_selection(self.obj, 'A', [0, 1])
+        add_material(self.doc, self.obj, 'Base')
+        add_material(self.doc, self.obj, 'MatA', 'A')
+
+        self.assertTrue(self.convert(split_mode=SPLIT_BY_MATERIALS, delete_empty_source=True))
+        self.assertEqual(names(root_objects(self.doc)), ['Base', 'MatA'])
+
+        self.doc.DoUndo()
+
+        objects = root_objects(self.doc)
+        self.assertEqual(names(objects), ['Source'])
+        self.assertEqual(objects[0].GetPolygonCount(), 6)
+        self.assertEqual(materials_of(objects[0]), {'Base': '', 'MatA': 'A'})
+        self.assertEqual(tag_names(objects[0], c4d.Tpolygonselection), ['A'])
+
+
 class CommandTest(BaseTest):
 
     def setUp(self):
