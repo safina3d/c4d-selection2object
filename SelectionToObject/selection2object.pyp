@@ -2,7 +2,6 @@
 
 """
   Author  : Safina3D
-  Version : 1.2.0
   Website : https://safina3d.blogspot.com
   Description: Convert polygon selection tags into separate objects.
 """
@@ -11,73 +10,71 @@ import os
 import c4d
 from c4d import gui, utils, bitmaps, BaseContainer
 
+PLUGIN_ID = 1055923
+PLUGIN_VERSION = "1.2.1"
 
-def call_split_command(obj, doc):
-    """Splits an object based on the active polygon selection."""
-    if obj is None or doc is None:
-        return None
 
-    try:
-        result = utils.SendModelingCommand(
-            command=c4d.MCOMMAND_SPLIT,
-            list=[obj.GetClone(flags=c4d.COPYFLAGS_NO_HIERARCHY | c4d.COPYFLAGS_NO_BITS)],
-            mode=c4d.MODELINGCOMMANDMODE_POLYGONSELECTION,
-            bc=BaseContainer(),
-            doc=doc
-        )
-        return result[0] if result else None
+def call_modeling_command(command, obj, doc):
+    """Runs a modeling command on the active polygon selection of an object."""
+    result = utils.SendModelingCommand(
+        command=command,
+        list=[obj],
+        mode=c4d.MODELINGCOMMANDMODE_POLYGONSELECTION,
+        bc=BaseContainer(),
+        doc=doc
+    )
+    return result
 
-    except Exception as e:
-        print(f"Error in split command: {e}")
-        return None
+
+def set_polygon_selection(obj, selection):
+    """Replaces the active polygon selection of an object."""
+    poly_selection = obj.GetPolygonS()
+    poly_selection.DeselectAll()
+    selection.CopyTo(poly_selection)
 
 
 def is_button_pressed(button):
-    """Checks if a specific button is pressed."""
-    try:
-        msg = BaseContainer()
-        gui.GetInputState(c4d.BFM_INPUT_KEYBOARD, c4d.BFM_INPUT_CHANNEL, msg)
-        return msg.GetLong(c4d.BFM_INPUT_QUALIFIER) & button
-    except:
+    """Checks if a specific qualifier key is pressed."""
+    msg = BaseContainer()
+    if not gui.GetInputState(c4d.BFM_INPUT_KEYBOARD, c4d.BFM_INPUT_CHANNEL, msg):
         return False
+    return bool(msg.GetInt32(c4d.BFM_INPUT_QUALIFIER) & button)
+
+
+def get_selection_tags(obj):
+    """Returns polygon selection tags, last tag first."""
+    return [tag for tag in reversed(obj.GetTags()) if tag.GetType() == c4d.Tpolygonselection]
 
 
 def remove_selection_tags(obj):
     """Removes all polygon selection tags from an object."""
-    if obj is None:
-        return
-
-    tags = obj.GetTags()
-    for tag in tags:
-        if c4d.Tpolygonselection == tag.GetType():
+    for tag in obj.GetTags():
+        if tag.GetType() == c4d.Tpolygonselection:
             tag.Remove()
 
 
-def remove_unused_materials(obj, selection_name):
-    """Handles unused materials and clears restrictions."""
-    if obj is None:
-        return
-
-    tags = obj.GetTags()
-    for tag in tags:
+def clean_split_materials(obj, selection_name):
+    """Keeps materials applied to the whole object and those restricted to the given selection."""
+    for tag in obj.GetTags():
         if tag.GetType() != c4d.Ttexture:
             continue
 
-        texture_restriction_name = tag[c4d.TEXTURETAG_RESTRICTION]
-
-        if selection_name is None and texture_restriction_name == "":
+        restriction = tag[c4d.TEXTURETAG_RESTRICTION]
+        if not restriction:
+            # Applies to the whole object
             continue
 
-        # Has a restriction but we're not targeting any selection
-        has_unmatched_restriction = selection_name is None and texture_restriction_name != ""
-        # Has a restriction that doesn't match our target selection
-        has_mismatching_selection = selection_name and texture_restriction_name != selection_name
-
-        if has_unmatched_restriction or has_mismatching_selection:
-            tag.Remove()
-        else:
-            # The restriction matches the selection
+        if restriction == selection_name:
             tag[c4d.TEXTURETAG_RESTRICTION] = ""
+        else:
+            tag.Remove()
+
+
+def remove_converted_materials(obj, converted_names):
+    """Removes materials restricted to selections that were converted into objects."""
+    for tag in obj.GetTags():
+        if tag.GetType() == c4d.Ttexture and tag[c4d.TEXTURETAG_RESTRICTION] in converted_names:
+            tag.Remove()
 
 
 class SelectionsToObjects(c4d.plugins.CommandData):
@@ -85,7 +82,7 @@ class SelectionsToObjects(c4d.plugins.CommandData):
     def GetState(self, doc):
         """Enables the command if the active object is a polygon object."""
         op = doc.GetActiveObject()
-        return c4d.CMD_ENABLED if op and op.IsInstanceOf(c4d.Opolygon) else False
+        return c4d.CMD_ENABLED if op and op.IsInstanceOf(c4d.Opolygon) else 0
 
     def Execute(self, doc):
         """Converts polygon selection tags into separate objects."""
@@ -96,87 +93,105 @@ class SelectionsToObjects(c4d.plugins.CommandData):
         if not original_obj or not original_obj.IsInstanceOf(c4d.Opolygon):
             return False
 
+        if original_obj.GetPolygonCount() == 0:
+            return False
+
+        selection_tags = get_selection_tags(original_obj)
+        if not selection_tags:
+            return False
+
         delete_original_obj = is_button_pressed(c4d.QCTRL)
         make_child_objects = is_button_pressed(c4d.QSHIFT)
 
-        poly_selection = original_obj.GetPolygonS()
-        if not poly_selection:
-            return False
+        # All splits are done on a single clone without children. Its selection tags are
+        # updated by C4D each time polygons are deleted, so a polygon shared by several
+        # selections goes only to the first processed one.
+        work_obj = original_obj.GetClone(flags=c4d.COPYFLAGS_NO_HIERARCHY | c4d.COPYFLAGS_NO_BITS)
+        work_tags = get_selection_tags(work_obj)
 
-        count = original_obj.GetPolygonCount()
-        if count == 0:
-            return False
-
-        tags = list(reversed(original_obj.GetTags()))
-        new_obj_count = 0
+        converted_polygons = c4d.BaseSelect()
+        converted_tags = []
+        split_objects = []
 
         doc.StartUndo()
         doc.AddUndo(c4d.UNDOTYPE_CHANGE, original_obj)
 
         try:
-            for tag in tags:
-                if c4d.Tpolygonselection == tag.GetType():
-                    poly_selection.DeselectAll()
-                    bs = tag.GetBaseSelect()
+            for tag, work_tag in zip(selection_tags, work_tags):
+                bs = tag.GetBaseSelect()
+                if bs is None or bs.GetCount() == 0:
+                    continue
 
-                    if bs is None or bs.GetCount() == 0:
-                        continue
+                work_bs = work_tag.GetBaseSelect()
+                if work_bs is None or work_bs.GetCount() == 0:
+                    # Every polygon was already taken by another selection
+                    converted_tags.append(tag)
+                    continue
 
-                    for i in range(count):
-                        if bs.IsSelected(i):
-                            poly_selection.Select(i)
+                set_polygon_selection(work_obj, work_bs)
+                result = call_modeling_command(c4d.MCOMMAND_SPLIT, work_obj, doc)
+                if not result:
+                    continue
 
-                    split_obj = call_split_command(original_obj, doc)
-                    if split_obj:
-                        selection_name = tag.GetName()
-                        split_obj.SetName(selection_name)
+                split_obj = result[0]
+                selection_name = tag.GetName()
+                split_obj.SetName(selection_name)
+                remove_selection_tags(split_obj)
+                clean_split_materials(split_obj, selection_name)
 
-                        # Delete selected polygons from original
-                        utils.SendModelingCommand(
-                            command=c4d.MCOMMAND_DELETE,
-                            list=[original_obj],
-                            mode=c4d.MODELINGCOMMANDMODE_POLYGONSELECTION,
-                            doc=doc
-                        )
+                if not call_modeling_command(c4d.MCOMMAND_DELETE, work_obj, doc):
+                    raise RuntimeError(f"Unable to delete polygons of selection '{selection_name}'")
 
-                        remove_selection_tags(split_obj)
-                        remove_unused_materials(obj=split_obj, selection_name=selection_name)
+                converted_polygons.Merge(bs)
+                converted_tags.append(tag)
+                split_objects.append(split_obj)
 
-                        # Insert new object in hierarchy
-                        if make_child_objects and original_obj:
-                            doc.InsertObject(split_obj, parent=original_obj)
-                        else:
-                            doc.InsertObject(split_obj, parent=None, pred=original_obj)
+            if split_objects:
+                # Delete all converted polygons from the original object at once
+                set_polygon_selection(original_obj, converted_polygons)
+                if not call_modeling_command(c4d.MCOMMAND_DELETE, original_obj, doc):
+                    raise RuntimeError("Unable to delete polygons from the original object")
+                original_obj.GetPolygonS().DeselectAll()
 
-                        doc.AddUndo(c4d.UNDOTYPE_NEW, split_obj)
-                        new_obj_count += 1
+            converted_names = [tag.GetName() for tag in converted_tags]
+            for tag in converted_tags:
+                tag.Remove()
+            remove_converted_materials(original_obj, converted_names)
 
-                    tag.Remove()
+            # Inserted in reverse order to keep the tags order in the object manager
+            for split_obj in split_objects:
+                if make_child_objects:
+                    # Points are already in the original object space
+                    split_obj.SetMl(c4d.Matrix())
+                    doc.InsertObject(split_obj, parent=original_obj)
+                else:
+                    doc.InsertObject(split_obj, parent=None, pred=original_obj)
+                doc.AddUndo(c4d.UNDOTYPE_NEW, split_obj)
 
-            remove_unused_materials(obj=original_obj, selection_name=None)
-
-            if delete_original_obj  and not make_child_objects and new_obj_count > 0 and original_obj:
+            if delete_original_obj and not make_child_objects and split_objects:
+                doc.AddUndo(c4d.UNDOTYPE_DELETEOBJ, original_obj)
                 original_obj.Remove()
 
         except Exception as e:
-            print(f"Error during execution: {e}")
+            print(f"Selections To Objects - error during execution: {e}")
+            doc.EndUndo()
             doc.DoUndo()
+            c4d.EventAdd()
             return False
 
-        finally:
-            doc.EndUndo()
-            c4d.EventAdd()
-
+        doc.EndUndo()
+        c4d.EventAdd()
         return True
 
+
 if __name__ == '__main__':
-    icon_absolute_path = os.path.join(os.path.dirname(__file__), 'res/icons', 'selection.tif')
+    icon_absolute_path = os.path.join(os.path.dirname(__file__), 'res', 'icons', 'selection.tif')
     icon = bitmaps.BaseBitmap()
     icon.InitWith(icon_absolute_path)
 
     c4d.plugins.RegisterCommandPlugin(
-        id=1055923,
-        str='Selections To Objects 1.2',
+        id=PLUGIN_ID,
+        str=f'Selections To Objects {PLUGIN_VERSION}',
         info=0,
         icon=icon,
         help='Convert polygon selection tags to objects. [CTRL] Delete Source. [SHIFT] Insert as Children',
